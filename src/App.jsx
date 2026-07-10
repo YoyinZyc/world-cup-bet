@@ -419,6 +419,7 @@ function computeTitles(players, bets) {
 export default function WorldCupBetting() {
   const [screen, setScreen] = useState('loading'); // loading | join | board | leaderboard | matches
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(null);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [initialLoadDone, setInitialLoadDone] = useState(false); // true once the first shared-data load has genuinely succeeded (or genuinely confirmed empty) -- distinguishes "room has no matches" from "haven't successfully read yet"
   const [name, setName] = useState('');
   const [roomCode, setRoomCode] = useState('');
@@ -1350,7 +1351,7 @@ export default function WorldCupBetting() {
 
   if (screen === 'join') {
     return (
-      <div style={styles.page}>
+      <div style={styles.page} className="animate-fade-in">
         <style>{fontFace}</style>
         <div className="join-card">
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
@@ -1404,7 +1405,7 @@ export default function WorldCupBetting() {
   }
 
   return (
-    <div style={styles.page}>
+    <div style={styles.page} className="animate-fade-in">
       <style>{fontFace}</style>
       {toast && <div style={styles.toast}>{toast}</div>}
 
@@ -1416,7 +1417,7 @@ export default function WorldCupBetting() {
             👑 主持人: {hostName || '（等待加入）'}
           </span>
         </div>
-        <button style={styles.leaveBtn} onClick={leaveRoom}>切换房间</button>
+        <button style={styles.leaveBtn} onClick={() => setShowLeaveConfirm(true)}>切换房间</button>
       </div>
 
       {/* Welcome banner */}
@@ -1808,8 +1809,9 @@ export default function WorldCupBetting() {
       )}
 
       {screen === 'leaderboard' && (
-        <div style={styles.modalOverlay} onClick={() => setScreen('board')}>
-          <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalOverlay} onClick={() => setScreen('board')} className="mobile-bottom-sheet-overlay">
+          <div style={styles.modalCard} onClick={(e) => e.stopPropagation()} className="mobile-bottom-sheet-card">
+            <div className="sheet-handle-wrap" style={styles.sheetHandle} />
             <div style={styles.modalTitle}>房间「{sessionCode}」总筹码排行榜</div>
             {leaderboard.map(([n, chips], i) => (
               <div key={n} style={styles.rankRow}>
@@ -1844,43 +1846,73 @@ export default function WorldCupBetting() {
           playerStats={playerStats}
           bets={bets}
           matches={matches}
+          myName={myName}
           onClose={() => setScreen('leaderboard')}
         />
       )}
 
       {screen === 'matches' && (
-        <div style={styles.modalOverlay} onClick={() => setScreen('board')}>
-          <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalOverlay} onClick={() => setScreen('board')} className="mobile-bottom-sheet-overlay">
+          <div style={styles.modalCard} onClick={(e) => e.stopPropagation()} className="mobile-bottom-sheet-card">
+            <div className="sheet-handle-wrap" style={styles.sheetHandle} />
             <div style={styles.modalTitle}>比赛管理 · 房间「{sessionCode}」</div>
-            <div style={styles.matchListWrap}>
-              {matchList.map(([id, m]) => (
-                <div key={id} style={{ ...styles.matchListItem, borderColor: id === activeMatchId ? '#F2A93B' : '#2A5744' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={styles.matchListTeams}>{m.home} {m.homeScore} : {m.awayScore} {m.away}</div>
-                    <div style={styles.matchListStatus}>{m.status === 'live' ? '进行中' : '已结束'}</div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {id !== activeMatchId && (
-                      <button style={styles.smallBtn} onClick={() => switchMatch(id)}>切换</button>
-                    )}
+             <div style={styles.matchListWrap}>
+              {matchList.map(([id, m]) => {
+                const isActive = id === activeMatchId;
+                return (
+                  <div
+                    key={id}
+                    onClick={() => !isActive && switchMatch(id)}
+                    style={{
+                      ...styles.matchListItem,
+                      borderColor: isActive ? '#F2A93B' : '#2A5744',
+                      background: isActive ? 'rgba(242, 169, 59, 0.08)' : 'rgba(15, 69, 54, 0.25)',
+                      cursor: isActive ? 'default' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    <div style={{ flex: 1, textAlign: 'left' }}>
+                      <div style={styles.matchListTeams}>
+                        {m.home} {m.homeScore} : {m.awayScore} {m.away}
+                        {isActive && (
+                          <span style={{ fontSize: 9, color: '#F2A93B', border: '1px solid #F2A93B', borderRadius: 4, padding: '1px 4px', marginLeft: 8, verticalAlign: 'middle', fontWeight: 700 }}>
+                            当前选中
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ ...styles.matchListStatus, color: m.status === 'live' ? '#86EFAC' : '#9FB8AC', marginTop: 4 }}>
+                        {m.status === 'live' ? '🟢 进行中' : '⚪ 已结束'}
+                      </div>
+                    </div>
                     {m.status === 'live' && isHost && (
-                      <button style={styles.smallBtnEnd} onClick={() => endMatch(id)}>结束</button>
+                      <button
+                        style={{ ...styles.smallBtnEnd, marginLeft: 10 }}
+                        onClick={(e) => {
+                          e.stopPropagation(); // Avoid triggering switchMatch when ending the match
+                          endMatch(id);
+                        }}
+                      >
+                        结束
+                      </button>
                     )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <div style={{ ...styles.sectionLabel, paddingLeft: 0, paddingRight: 0, paddingTop: 20, paddingBottom: 8 }}>新建比赛</div>
-            <div style={{ ...styles.customRow, paddingLeft: 0, paddingRight: 0 }}>
+            <div style={{ ...styles.customRow, paddingLeft: 0, paddingRight: 0, justifyContent: 'center' }}>
               <input
-                style={styles.customInput}
-                placeholder="主队名"
+                style={{ ...styles.customInput, textAlign: 'center' }}
+                placeholder="队伍1"
                 value={newMatchDraft.home}
                 onChange={(e) => setNewMatchDraft({ ...newMatchDraft, home: e.target.value })}
               />
               <input
-                style={styles.customInput}
-                placeholder="客队名"
+                style={{ ...styles.customInput, textAlign: 'center' }}
+                placeholder="队伍2"
                 value={newMatchDraft.away}
                 onChange={(e) => setNewMatchDraft({ ...newMatchDraft, away: e.target.value })}
               />
@@ -1904,6 +1936,27 @@ export default function WorldCupBetting() {
           </div>
         </div>
       )}
+
+      {showLeaveConfirm && (
+        <div style={styles.modalOverlay} onClick={() => setShowLeaveConfirm(false)} className="mobile-bottom-sheet-overlay">
+          <div style={styles.modalCard} onClick={(e) => e.stopPropagation()} className="mobile-bottom-sheet-card">
+            <div className="sheet-handle-wrap" style={styles.sheetHandle} />
+            <div style={styles.modalTitle}>切换房间</div>
+            <div style={{ color: '#9FB8AC', fontSize: 13, marginBottom: 20, lineHeight: 1.5, textAlign: 'center' }}>
+              确定要离开当前房间吗？你的积分和下注历史会被保留，但你需要重新输入房间码才能进入。
+            </div>
+            <button style={{ ...styles.joinBtn, background: '#E14B3D', color: '#F5F5F0', boxShadow: '0 4px 14px rgba(225, 75, 61, 0.3)', marginBottom: 10 }} onClick={() => {
+              setShowLeaveConfirm(false);
+              leaveRoom();
+            }}>
+              确定离开
+            </button>
+            <button style={styles.closeModalBtn} onClick={() => setShowLeaveConfirm(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
       <TabBar active="board" onSwitch={setScreen} />
     </div>
   );
@@ -1915,6 +1968,71 @@ const fontFace = `
   /* Global box-sizing reset for mobile layout safety */
   * {
     box-sizing: border-box;
+  }
+
+  /* Premium scrollbar for scrollable panels */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(242, 169, 59, 0.25);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(242, 169, 59, 0.4);
+  }
+
+  /* Fade-in and Slide-up transitions */
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes slideUpSheet {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+  .animate-fade-in {
+    animation: fadeInUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  /* Responsive bottom sheets on mobile devices */
+  @media (max-width: 768px) {
+    .mobile-bottom-sheet-overlay {
+      align-items: flex-end !important;
+      padding: 0 !important;
+      background: rgba(5, 12, 10, 0.8) !important;
+    }
+    .mobile-bottom-sheet-card {
+      max-width: 100% !important;
+      width: 100% !important;
+      border-radius: 20px 20px 0 0 !important;
+      padding: 16px 20px 32px !important;
+      animation: slideUpSheet 0.35s cubic-bezier(0.15, 0.85, 0.35, 1) forwards;
+      max-height: 85vh !important;
+      overflow-y: auto !important;
+      border: 1px solid rgba(242, 169, 59, 0.15) !important;
+      border-bottom: none !important;
+      box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.5) !important;
+    }
+  }
+  @media (min-width: 769px) {
+    .sheet-handle-wrap {
+      display: none !important;
+    }
   }
 
   /* Title Gradient */
@@ -2056,7 +2174,7 @@ function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, hos
   const poolLabel = (poolKey) => (poolKey === 'final' ? '最终结果' : poolKey === 'regulation' ? '常规时间' : '');
 
   return (
-    <div style={styles.page}>
+    <div style={styles.page} className="animate-fade-in">
       <style>{fontFace}</style>
       <div style={styles.roomBar}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -2203,7 +2321,7 @@ function BetConfirmModal({ pending, myChips, onCancel, onConfirm }) {
   );
 }
 
-function RecapCard({ sessionCode, leaderboard, playerTitles, playerStats, bets, matches, onClose }) {
+function RecapCard({ sessionCode, leaderboard, playerTitles, playerStats, bets, matches, myName, onClose }) {
   // find the single most dramatic moment: the won bet with the highest profit relative to its stake
   let dramaticBet = null;
   let dramaticMultiple = 0;
@@ -2278,6 +2396,40 @@ function RecapCard({ sessionCode, leaderboard, playerTitles, playerStats, bets, 
               <span style={recapStyles.titleLabel}>{t.label}</span>
             </div>
           ))}
+        </div>
+
+        <div style={recapStyles.historySection}>
+          <div style={recapStyles.titleSectionLabel}>我的下注历史</div>
+          {bets.filter((b) => b.player === myName).length === 0 ? (
+            <div style={recapStyles.noTitles}>你本场还没有下过注</div>
+          ) : (
+            <div style={recapStyles.historyList}>
+              {bets
+                .filter((b) => b.player === myName)
+                .map((b) => {
+                  const payoutText = b.status === 'won'
+                    ? `赢 ${Math.round(b.betClass === 'pool' ? (b.payout || 0) : b.amount * (b.odds || 0))}`
+                    : b.status === 'refunded'
+                    ? '已退还'
+                    : b.status === 'lost'
+                    ? '未中'
+                    : '待结算';
+                  const payoutColor = b.status === 'won' ? '#F2A93B' : b.status === 'lost' ? '#E14B3D' : '#7B93B0';
+
+                  return (
+                    <div key={b.id} style={recapStyles.historyRow}>
+                      <div style={recapStyles.historyLeft}>
+                        <span style={recapStyles.historyLabel}>押「{b.label}」</span>
+                      </div>
+                      <div style={recapStyles.historyRight}>
+                        <span style={recapStyles.historyAmount}>{b.amount} 筹码</span>
+                        <span style={{ ...recapStyles.historyStatus, color: payoutColor }}>{payoutText}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
         </div>
 
         <div style={recapStyles.footer}>世界杯观赛夜实时下注 · 纯积分玩具，不涉及真钱</div>
@@ -3448,6 +3600,38 @@ const confirmStyles = {
     cursor: 'pointer',
     boxShadow: '0 4px 14px rgba(242,169,59,0.35)',
   },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    background: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 2,
+    margin: '0 auto 16px',
+    display: 'block',
+  },
+  welcomeBanner: {
+    background: 'rgba(242, 169, 59, 0.12)',
+    borderBottom: '1px solid rgba(242, 169, 59, 0.3)',
+    color: '#FFD175',
+    padding: '12px 20px',
+    fontSize: 13,
+    lineHeight: 1.5,
+  },
+  welcomeBannerContent: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    maxWidth: 1126,
+    margin: '0 auto',
+  },
+  welcomeBannerClose: {
+    background: 'transparent',
+    border: 'none',
+    color: '#FFD175',
+    fontSize: 20,
+    cursor: 'pointer',
+    padding: '0 5px',
+    lineHeight: 1,
+  },
 };
 
 const recapStyles = {
@@ -3605,29 +3789,55 @@ const recapStyles = {
     fontSize: 12,
     color: '#F2A93B',
   },
-  welcomeBanner: {
-    background: 'rgba(242, 169, 59, 0.12)',
-    borderBottom: '1px solid rgba(242, 169, 59, 0.3)',
-    color: '#FFD175',
-    padding: '12px 20px',
-    fontSize: 13,
-    lineHeight: 1.5,
+  historySection: {
+    marginTop: 18,
+    borderTop: '1px solid #1D5C46',
+    paddingTop: 14,
+    textAlign: 'left',
   },
-  welcomeBannerContent: {
+  historyList: {
+    maxHeight: 150,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    paddingRight: 4,
+    marginTop: 8,
+  },
+  historyRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    maxWidth: 1126,
-    margin: '0 auto',
+    fontSize: 11,
+    padding: '6px 8px',
+    background: 'rgba(0, 0, 0, 0.2)',
+    borderRadius: 6,
+    border: '1px solid rgba(42, 87, 68, 0.4)',
   },
-  welcomeBannerClose: {
-    background: 'transparent',
-    border: 'none',
+  historyLeft: {
+    display: 'flex',
+    gap: 4,
+    color: '#F5F5F0',
+    flexWrap: 'wrap',
+  },
+  historyPlayer: {
+    fontWeight: 700,
     color: '#FFD175',
-    fontSize: 20,
-    cursor: 'pointer',
-    padding: '0 5px',
-    lineHeight: 1,
+  },
+  historyLabel: {
+    color: '#9FB8AC',
+  },
+  historyRight: {
+    display: 'flex',
+    gap: 8,
+    alignItems: 'center',
+  },
+  historyAmount: {
+    color: '#9FB8AC',
+    fontSize: 10,
+  },
+  historyStatus: {
+    fontWeight: 700,
   },
   footer: {
     textAlign: 'center',
