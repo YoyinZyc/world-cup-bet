@@ -2054,10 +2054,12 @@ const fontFace = `
   }
   @keyframes slideUpSheet {
     from {
-      transform: translateY(100%);
+      transform: translateY(30px);
+      opacity: 0;
     }
     to {
       transform: translateY(0);
+      opacity: 1;
     }
   }
   .animate-fade-in {
@@ -2068,20 +2070,20 @@ const fontFace = `
   @media (max-width: 768px) {
     .mobile-bottom-sheet-overlay {
       align-items: flex-end !important;
-      padding: 0 !important;
+      padding: 12px !important;
       background: rgba(5, 12, 10, 0.8) !important;
     }
     .mobile-bottom-sheet-card {
       max-width: 100% !important;
       width: 100% !important;
-      border-radius: 20px 20px 0 0 !important;
-      padding: 16px 20px 32px !important;
+      margin: 0 auto calc(8px + env(safe-area-inset-bottom, 12px)) !important;
+      border-radius: 20px !important;
+      padding: 18px 20px calc(20px + env(safe-area-inset-bottom, 16px)) !important;
       animation: slideUpSheet 0.35s cubic-bezier(0.15, 0.85, 0.35, 1) forwards;
       max-height: 85vh !important;
       overflow-y: auto !important;
-      border: 1px solid rgba(242, 169, 59, 0.15) !important;
-      border-bottom: none !important;
-      box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.5) !important;
+      border: 1px solid rgba(242, 169, 59, 0.25) !important;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6) !important;
     }
   }
   @media (min-width: 769px) {
