@@ -1473,8 +1473,6 @@ export default function WorldCupBetting() {
       <style>{fontFace}</style>
       {toast && <div style={styles.toast}>{toast}</div>}
 
-      <div className="animate-fade-in">
-
       {/* Room bar */}
       <div style={styles.roomBar}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -1490,6 +1488,8 @@ export default function WorldCupBetting() {
           <button style={styles.leaveBtn} onClick={() => setShowLeaveConfirm(true)}>切换房间</button>
         </div>
       </div>
+
+      <div className="animate-fade-in">
 
       {/* Welcome banner */}
       {showWelcomeBanner && (
@@ -2370,8 +2370,7 @@ function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, hos
   return (
     <div style={styles.page}>
       <style>{fontFace}</style>
-      <div className="animate-fade-in">
-        <div style={styles.roomBar}>
+      <div style={styles.roomBar}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={styles.roomCodeTag}>房间 {sessionCode} · 下注情况</span>
           <span style={{ fontSize: 10, color: '#9FB8AC', fontWeight: 500 }}>
@@ -2379,6 +2378,8 @@ function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, hos
           </span>
         </div>
       </div>
+
+      <div className="animate-fade-in">
 
       <div style={styles.betsFilterRow}>
         <button
@@ -2935,7 +2936,6 @@ const styles = {
   chipsLabel: {
     fontSize: 11,
     color: '#9FB8AC',
-    textTransform: 'uppercase',
     letterSpacing: 1,
   },
   chipsValue: {
