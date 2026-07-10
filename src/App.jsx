@@ -1406,9 +1406,9 @@ export default function WorldCupBetting() {
 
   if (screen === 'join') {
     return (
-      <div style={styles.page} className="animate-fade-in">
+      <div style={styles.page}>
         <style>{fontFace}</style>
-        <div className="join-card">
+        <div className="join-card animate-fade-in">
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
             <img src={heroImg} style={{ width: 140, height: 'auto', objectFit: 'contain' }} alt="Hero Logo" />
           </div>
@@ -1460,9 +1460,11 @@ export default function WorldCupBetting() {
   }
 
   return (
-    <div style={styles.page} className="animate-fade-in">
+    <div style={styles.page}>
       <style>{fontFace}</style>
       {toast && <div style={styles.toast}>{toast}</div>}
+
+      <div className="animate-fade-in">
 
       {/* Room bar */}
       <div style={styles.roomBar}>
@@ -1827,14 +1829,7 @@ export default function WorldCupBetting() {
         </>
       )}
 
-      {pendingBetConfirm && (
-        <BetConfirmModal
-          pending={pendingBetConfirm}
-          myChips={myChips}
-          onCancel={cancelBetConfirm}
-          onConfirm={confirmBet}
-        />
-      )}
+
 
       {/* Host: resolve pending event bets (pool bets are settled together via settleMatchPool above) */}
       {isHost && pendingEventBets.length > 0 && (
@@ -1863,7 +1858,19 @@ export default function WorldCupBetting() {
         </>
       )}
 
-      {screen === 'leaderboard' && (
+      <TabBar active="board" onSwitch={setScreen} />
+    </div>
+
+    {pendingBetConfirm && (
+      <BetConfirmModal
+        pending={pendingBetConfirm}
+        myChips={myChips}
+        onCancel={cancelBetConfirm}
+        onConfirm={confirmBet}
+      />
+    )}
+
+    {screen === 'leaderboard' && (
         <div style={styles.modalOverlay} onClick={() => setScreen('board')} className="mobile-bottom-sheet-overlay">
           <div style={styles.modalCard} onClick={(e) => e.stopPropagation()} className="mobile-bottom-sheet-card">
             <div className="sheet-handle-wrap" style={styles.sheetHandle} />
@@ -2012,7 +2019,6 @@ export default function WorldCupBetting() {
           </div>
         </div>
       )}
-      <TabBar active="board" onSwitch={setScreen} />
     </div>
   );
 }
@@ -2231,9 +2237,10 @@ function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, hos
   const poolLabel = (poolKey) => (poolKey === 'final' ? '最终结果' : poolKey === 'regulation' ? '常规时间' : '');
 
   return (
-    <div style={styles.page} className="animate-fade-in">
+    <div style={styles.page}>
       <style>{fontFace}</style>
-      <div style={styles.roomBar}>
+      <div className="animate-fade-in">
+        <div style={styles.roomBar}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={styles.roomCodeTag}>房间 {sessionCode} · 下注情况</span>
           <span style={{ fontSize: 10, color: '#9FB8AC', fontWeight: 500 }}>
@@ -2281,7 +2288,8 @@ function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, hos
         })}
       </div>
 
-      <TabBar active="bets" onSwitch={onSwitchTab} />
+        <TabBar active="bets" onSwitch={onSwitchTab} />
+      </div>
     </div>
   );
 }
