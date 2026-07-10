@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './supabaseClient'; // 引入咱们配置好的客户端
+import heroImg from './assets/hero.png';
 
 // ====== 真正的云端同步适配器 ======
 if (typeof window !== 'undefined' && !window.storage) {
@@ -19,8 +20,32 @@ if (typeof window !== 'undefined' && !window.storage) {
 
       if (error || !data) throw new Error("Key not found");
       
-      // 修复：直接返回取回的值，不需要再多做一次 JSON.stringify
       return { value: data.value }; 
+    },
+
+    async getMany(keys, shared = false) {
+      if (!shared) {
+        const result = {};
+        for (const k of keys) {
+          const val = localStorage.getItem(k);
+          if (val !== null) result[k] = val;
+        }
+        return result;
+      }
+      const { data, error } = await supabase
+        .from('kv_store')
+        .select('key, value')
+        .in('key', keys);
+      
+      if (error) throw error;
+      
+      const result = {};
+      if (data) {
+        data.forEach(row => {
+          result[row.key] = row.value;
+        });
+      }
+      return result;
     },
 
     async set(key, value, shared = false) {
@@ -29,14 +54,37 @@ if (typeof window !== 'undefined' && !window.storage) {
         return true;
       }
 
-      // 修复：直接把 value（无论是序列化的 JSON 还是探针字符串 'ok'）丢给 Supabase
       const { error } = await supabase
         .from('kv_store')
         .upsert({ 
           key: key, 
-          value: value, // <--- 删掉了导致报错的 JSON.parse
+          value: value, 
           updated_at: new Date().toISOString() 
         });
+
+      if (error) {
+        console.error('Supabase Sync Error:', error);
+        throw error;
+      }
+      return true;
+    },
+
+    async setMany(entries, shared = false) {
+      if (!shared) {
+        Object.entries(entries).forEach(([k, v]) => {
+          localStorage.setItem(k, v);
+        });
+        return true;
+      }
+      const rows = Object.entries(entries).map(([k, v]) => ({
+        key: k,
+        value: v,
+        updated_at: new Date().toISOString()
+      }));
+
+      const { error } = await supabase
+        .from('kv_store')
+        .upsert(rows);
 
       if (error) {
         console.error('Supabase Sync Error:', error);
@@ -63,6 +111,7 @@ if (typeof window !== 'undefined' && !window.storage) {
 }
 // =============
 const STARTING_CHIPS = 100;
+const POLLING_INTERVAL_MS = 10000;
 const ME_KEY = 'me-identity'; // personal (non-shared) storage: { name, sessionCode }
 const SESSION_INDEX_KEY = 'session-index'; // shared: { [code]: { createdAt, label } } — just for existence checks
 
@@ -138,7 +187,7 @@ function sharesForStake(chips, pricePerShare) {
 
 // Settles one pool (either "final" or "regulation") once the host records its outcome.
 // poolBets: [{ id, player, direction, amount, shares }] — all pending bets for this specific pool.
-// Returns { payouts: { [player]: totalChipsReceived }, refunded: boolean }
+// Returns { payouts: { [player]: totalChipsReceived }, betPayouts: { [betId]: payoutAmount }, refunded: boolean }
 function settlePool(poolBets, winningDirection) {
   const winners = poolBets.filter((b) => b.direction === winningDirection);
   const losers = poolBets.filter((b) => b.direction !== winningDirection);
@@ -148,17 +197,23 @@ function settlePool(poolBets, winningDirection) {
   if (winners.length === 0 || winnerTotalShares <= 0) {
     // nobody backed the winning outcome -- refund everyone's stake, nothing lost, nothing gained
     const refunds = {};
-    poolBets.forEach((b) => { refunds[b.player] = (refunds[b.player] || 0) + b.amount; });
-    return { payouts: refunds, refunded: true };
+    const betPayouts = {};
+    poolBets.forEach((b) => {
+      refunds[b.player] = (refunds[b.player] || 0) + b.amount;
+      betPayouts[b.id] = b.amount;
+    });
+    return { payouts: refunds, betPayouts, refunded: true };
   }
 
   const payouts = {};
+  const betPayouts = {};
   winners.forEach((b) => {
     const bonus = loserPool * (b.shares / winnerTotalShares);
     const total = b.amount + bonus;
     payouts[b.player] = (payouts[b.player] || 0) + total;
+    betPayouts[b.id] = total;
   });
-  return { payouts, refunded: false };
+  return { payouts, betPayouts, refunded: false };
 }
 
 // ===== In-match proposition bets (event bets) =====
@@ -168,26 +223,23 @@ function settlePool(poolBets, winningDirection) {
 // also add brand-new event types mid-match (e.g. "extra time?", "penalty shootout?"), setting the
 // odds manually since there's no natural default for an arbitrary host-defined proposition.
 const DEFAULT_EVENT_ODDS = {
-  next_goal_home: 1.9,
-  next_goal_away: 1.9,
-  next_goal_none: 2.4,
-  yellow_card: 1.7,
+  next_goal_home: 1.6,
+  next_goal_away: 1.6,
   red_card: 4.5,
-  penalty: 3.8,
-  var_review: 2.6,
+  penalty: 4.0,
+  var_review: 2.5,
+  first_half_no_goals: 2.8,
+  second_half_no_goals: 3.2,
+  extra_time_occurs: 3.5,
+  penalty_shootout_occurs: 4.8,
 };
 
 function eventOdds(eventKey, homeScore, awayScore, overrides) {
   const totalGoals = homeScore + awayScore;
 
-  if (eventKey === 'next_goal_home' || eventKey === 'next_goal_away' || eventKey === 'next_goal_none') {
+  if (eventKey === 'next_goal_home' || eventKey === 'next_goal_away') {
     if (overrides && overrides[eventKey] != null) return overrides[eventKey];
-    const homeStrength = 1;
-    const awayStrength = 1;
-    const noneStrength = 1.25;
-    const total = homeStrength + awayStrength + noneStrength;
-    const probs = { next_goal_home: homeStrength / total, next_goal_away: awayStrength / total, next_goal_none: noneStrength / total };
-    return Math.min(50, +(1 / probs[eventKey]).toFixed(2));
+    return 1.6; // Default next goal odds
   }
 
   if (overrides && overrides[eventKey] != null) return overrides[eventKey];
@@ -206,18 +258,25 @@ const EVENT_ODDS_MAX = 6; // keeps host-set odds within the existing 1.7x~4.5x-i
 // their default label (not the generic "主队"/"客队"), since a room full of people watching e.g.
 // Argentina vs Brazil shouldn't have to mentally translate "主队" back into which team that is.
 // Events with no team-specific wording (cards, penalty, VAR) don't need the team names at all.
-function buildFixedEvents(homeTeam, awayTeam) {
+function buildFixedEvents(homeTeam, awayTeam, matchMode) {
   const home = homeTeam || '主队';
   const away = awayTeam || '客队';
-  return [
+  const list = [
     { key: 'next_goal_home', label: `下一球：${home}进` },
     { key: 'next_goal_away', label: `下一球：${away}进` },
-    { key: 'next_goal_none', label: '下半场无进球' },
-    { key: 'yellow_card', label: '下一张黄牌' },
+    { key: 'first_half_no_goals', label: '上半场无进球' },
+    { key: 'second_half_no_goals', label: '下半场无进球' },
     { key: 'red_card', label: '出现红牌' },
-    { key: 'penalty', label: '出现点球' },
+    { key: 'penalty', label: '出现点球（非点球大战）' },
     { key: 'var_review', label: 'VAR介入' },
   ];
+  if (matchMode === 'knockout') {
+    list.push(
+      { key: 'extra_time_occurs', label: '有加时赛' },
+      { key: 'penalty_shootout_occurs', label: '有点球大战' }
+    );
+  }
+  return list;
 }
 
 function newMatchId() {
@@ -359,6 +418,7 @@ function computeTitles(players, bets) {
 
 export default function WorldCupBetting() {
   const [screen, setScreen] = useState('loading'); // loading | join | board | leaderboard | matches
+  const [showWelcomeBanner, setShowWelcomeBanner] = useState(null);
   const [initialLoadDone, setInitialLoadDone] = useState(false); // true once the first shared-data load has genuinely succeeded (or genuinely confirmed empty) -- distinguishes "room has no matches" from "haven't successfully read yet"
   const [name, setName] = useState('');
   const [roomCode, setRoomCode] = useState('');
@@ -383,6 +443,16 @@ export default function WorldCupBetting() {
   useEffect(() => { matchesRef.current = matches; }, [matches]);
   useEffect(() => { playersRef.current = players; }, [players]);
   useEffect(() => { betsRef.current = bets; }, [bets]);
+
+  // Auto-dismiss welcome back banner after 4 seconds
+  useEffect(() => {
+    if (showWelcomeBanner) {
+      const timer = setTimeout(() => {
+        setShowWelcomeBanner(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [showWelcomeBanner]);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -448,45 +518,35 @@ export default function WorldCupBetting() {
 
   const loadAll = useCallback(async (code) => {
     if (!code) return { ok: false };
-    // Read all five keys in parallel. CRITICAL: window.storage.get() THROWS for a key that
-    // doesn't exist yet (per the storage API spec) -- and a missing key is a completely normal,
-    // expected state (a brand-new room hasn't written 'players'/'bets' yet; an empty room hasn't
-    // written 'matches' yet). So a rejected read here means "nothing stored under this key",
-    // NOT "the read failed / the network is down". We must treat it as "no data, skip it and
-    // leave existing state alone", exactly like the original per-key try/catch did.
-    //
-    // The v15 regression that broke cross-device sync came from treating a rejected read as a
-    // failure: it flagged matchesOk=false whenever the 'matches' key didn't exist yet, which
-    // (a) kicked off an 800ms retry storm, and (b) made the reconnect loop's success check never
-    // pass for a freshly-created room, so the board stayed stuck on a loading/empty state and
-    // never rendered the data that was actually there. Reverting to "rejection just means empty"
-    // fixes it.
-    const results = await Promise.allSettled([
-      window.storage.get(sessionKey(code, 'matches'), true),
-      window.storage.get(sessionKey(code, 'active-match'), true),
-      window.storage.get(sessionKey(code, 'players'), true),
-      window.storage.get(sessionKey(code, 'bets'), true),
-      window.storage.get(sessionKey(code, 'host'), true),
-    ]);
-    const [matchesRes, activeRes, playersRes, betsRes, hostRes] = results;
+    const keys = [
+      sessionKey(code, 'matches'),
+      sessionKey(code, 'active-match'),
+      sessionKey(code, 'players'),
+      sessionKey(code, 'bets'),
+      sessionKey(code, 'host'),
+    ];
 
-    const applyIfPresent = (res, apply) => {
-      // fulfilled with a value -> use it; rejected (missing key) or empty -> leave state as-is
-      if (res.status === 'fulfilled' && res.value && res.value.value) {
-        try { apply(JSON.parse(res.value.value)); } catch (e) {}
-      }
-    };
-    applyIfPresent(matchesRes, setMatches);
-    applyIfPresent(activeRes, setActiveMatchId);
-    applyIfPresent(playersRes, setPlayers);
-    applyIfPresent(betsRes, setBets);
-    applyIfPresent(hostRes, setHostName);
+    try {
+      const data = await window.storage.getMany(keys, true);
 
-    // Always "ok" -- reaching here means the reads completed (whether or not any key had data).
-    // We deliberately do NOT retry on a missing key, since that's a normal empty state, not a
-    // failure. (A genuine transport error would also land here as a rejection and simply be
-    // treated as "no update this cycle"; the next 3s poll will pick up any data once it exists.)
-    return { ok: true };
+      const applyIfPresent = (key, apply) => {
+        const val = data[key];
+        if (val !== undefined && val !== null) {
+          try { apply(JSON.parse(val)); } catch (e) {}
+        }
+      };
+
+      applyIfPresent(sessionKey(code, 'matches'), setMatches);
+      applyIfPresent(sessionKey(code, 'active-match'), setActiveMatchId);
+      applyIfPresent(sessionKey(code, 'players'), setPlayers);
+      applyIfPresent(sessionKey(code, 'bets'), setBets);
+      applyIfPresent(sessionKey(code, 'host'), setHostName);
+
+      return { ok: true };
+    } catch (e) {
+      console.error("Failed to load room data:", e);
+      return { ok: false };
+    }
   }, []);
 
   // When the tab comes back from the background (phone locked, switched apps, browser
@@ -542,7 +602,7 @@ export default function WorldCupBetting() {
       // may be in an unreliable state (some browsers don't resume a timer's original cadence
       // cleanly after a suspend), so replace it with a fresh one
       if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(() => loadAll(sessionCode), 3000);
+      pollRef.current = setInterval(() => loadAll(sessionCode), POLLING_INTERVAL_MS);
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     // Some mobile browsers fire 'pageshow' (with persisted=true for back/forward-cache restores)
@@ -555,7 +615,7 @@ export default function WorldCupBetting() {
       if (sessionCode && forceResyncRef.current) {
         forceResyncRef.current(sessionCode);
         if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = setInterval(() => loadAll(sessionCode), 3000);
+        pollRef.current = setInterval(() => loadAll(sessionCode), POLLING_INTERVAL_MS);
       }
     };
     window.addEventListener('pageshow', handlePageShow);
@@ -577,14 +637,12 @@ export default function WorldCupBetting() {
             setMyName(parsed.name);
             setSessionCode(parsed.sessionCode);
             // Load the room's shared data once. A missing key just means "empty so far", not a
-            // failure, so there's nothing to retry -- the 3s poll below keeps everything current
-            // from here on. (The earlier retry-loop here was built on a mistaken "rejected read =
-            // failure" assumption that also made a freshly-created empty room look permanently
-            // un-loadable, which is what broke sync in v15.)
+            // failure, so there's nothing to retry -- the poll below keeps everything current
+            // from here on.
             await loadAll(parsed.sessionCode);
             setInitialLoadDone(true);
             setScreen('board');
-            pollRef.current = setInterval(() => loadAll(parsed.sessionCode), 3000);
+            pollRef.current = setInterval(() => loadAll(parsed.sessionCode), POLLING_INTERVAL_MS);
             return;
           }
         }
@@ -594,6 +652,73 @@ export default function WorldCupBetting() {
     })();
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [loadAll]);
+
+  // Real-time synchronization using Supabase Postgres Changes
+  useEffect(() => {
+    if (!sessionCode) return;
+
+    const keys = [
+      sessionKey(sessionCode, 'matches'),
+      sessionKey(sessionCode, 'active-match'),
+      sessionKey(sessionCode, 'players'),
+      sessionKey(sessionCode, 'bets'),
+      sessionKey(sessionCode, 'host'),
+    ];
+
+    const channel = supabase
+      .channel(`room:${sessionCode}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'kv_store',
+        },
+        (payload) => {
+          const row = payload.new || payload.old;
+          if (!row || !row.key) return;
+
+          // Only process updates to keys in this session
+          if (keys.includes(row.key)) {
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              try {
+                const parsedVal = JSON.parse(row.value);
+                if (row.key === sessionKey(sessionCode, 'matches')) {
+                  setMatches(parsedVal);
+                } else if (row.key === sessionKey(sessionCode, 'active-match')) {
+                  setActiveMatchId(parsedVal);
+                } else if (row.key === sessionKey(sessionCode, 'players')) {
+                  setPlayers(parsedVal);
+                } else if (row.key === sessionKey(sessionCode, 'bets')) {
+                  setBets(parsedVal);
+                } else if (row.key === sessionKey(sessionCode, 'host')) {
+                  setHostName(parsedVal);
+                }
+              } catch (e) {
+                console.error("Realtime update parsing error:", e);
+              }
+            } else if (payload.eventType === 'DELETE') {
+              if (row.key === sessionKey(sessionCode, 'matches')) {
+                setMatches({});
+              } else if (row.key === sessionKey(sessionCode, 'active-match')) {
+                setActiveMatchId(null);
+              } else if (row.key === sessionKey(sessionCode, 'players')) {
+                setPlayers({});
+              } else if (row.key === sessionKey(sessionCode, 'bets')) {
+                setBets([]);
+              } else if (row.key === sessionKey(sessionCode, 'host')) {
+                setHostName(null);
+              }
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [sessionCode]);
 
   // Every persist* function below writes to SHARED storage and must succeed for other devices
   // to ever see this data -- unlike the read side (where a missing key can legitimately mean
@@ -605,25 +730,39 @@ export default function WorldCupBetting() {
   // now returns whether the write succeeded, and callers surface a clear error toast on failure
   // instead of claiming success.
   const persistPlayers = async (code, next) => {
-    setPlayers(next);
     try {
-      await window.storage.set(sessionKey(code, 'players'), JSON.stringify(next), true);
+      let latest = {};
+      try {
+        const p = await window.storage.get(sessionKey(code, 'players'), true);
+        if (p && p.value) latest = JSON.parse(p.value);
+      } catch (e) {}
+      const merged = { ...latest, ...next };
+      setPlayers(merged);
+      await window.storage.set(sessionKey(code, 'players'), JSON.stringify(merged), true);
       return true;
     } catch (e) {
       showToast('⚠️ 筹码数据保存失败，请检查网络后重试');
       return false;
     }
   };
+
   const persistMatches = async (code, next) => {
-    setMatches(next);
     try {
-      await window.storage.set(sessionKey(code, 'matches'), JSON.stringify(next), true);
+      let latest = {};
+      try {
+        const m = await window.storage.get(sessionKey(code, 'matches'), true);
+        if (m && m.value) latest = JSON.parse(m.value);
+      } catch (e) {}
+      const merged = { ...latest, ...next };
+      setMatches(merged);
+      await window.storage.set(sessionKey(code, 'matches'), JSON.stringify(merged), true);
       return true;
     } catch (e) {
       showToast('⚠️ 比赛数据保存失败，请检查网络后重试');
       return false;
     }
   };
+
   const persistActiveMatch = async (code, id) => {
     setActiveMatchId(id);
     try {
@@ -634,16 +773,44 @@ export default function WorldCupBetting() {
       return false;
     }
   };
+
   const persistBets = async (code, next) => {
-    setBets(next);
     try {
-      await window.storage.set(sessionKey(code, 'bets'), JSON.stringify(next), true);
+      let latest = [];
+      try {
+        const b = await window.storage.get(sessionKey(code, 'bets'), true);
+        if (b && b.value) latest = JSON.parse(b.value);
+      } catch (e) {}
+
+      const getBetTime = (bet) => {
+        const ts = parseInt(bet.id?.split('-')[0], 10);
+        return isNaN(ts) ? 0 : ts;
+      };
+
+      const map = new Map();
+      latest.forEach(b => map.set(b.id, b));
+      next.forEach(b => {
+        if (!map.has(b.id)) {
+          map.set(b.id, b);
+        } else {
+          // If the bet already exists, prefer the one with resolved status (won/lost/refunded vs pending)
+          const remoteBet = map.get(b.id);
+          if (remoteBet.status === 'pending' && b.status !== 'pending') {
+            map.set(b.id, b);
+          }
+        }
+      });
+
+      const merged = Array.from(map.values()).sort((a, b) => getBetTime(b) - getBetTime(a));
+      setBets(merged);
+      await window.storage.set(sessionKey(code, 'bets'), JSON.stringify(merged), true);
       return true;
     } catch (e) {
       showToast('⚠️ 下注数据保存失败，请检查网络后重试');
       return false;
     }
   };
+
   const persistHost = async (code, name) => {
     setHostName(name);
     try {
@@ -673,10 +840,12 @@ export default function WorldCupBetting() {
 
     if (!current[trimmedName]) {
       current = { ...current, [trimmedName]: STARTING_CHIPS };
-      await persistPlayers(code, current);
+      const success = await persistPlayers(code, current);
+      if (!success) return;
       showToast(isNewRoom ? `新房间「${code}」已创建，欢迎 ${trimmedName}` : `欢迎 ${trimmedName}，获得 ${STARTING_CHIPS} 筹码`);
     } else {
       setPlayers(current);
+      setShowWelcomeBanner(trimmedName);
       showToast(`欢迎回来，${trimmedName}`);
     }
 
@@ -715,7 +884,7 @@ export default function WorldCupBetting() {
     setMyName(trimmedName);
     setSessionCode(code);
     try { await window.storage.set(ME_KEY, JSON.stringify({ name: trimmedName, sessionCode: code }), false); } catch (e) {}
-    pollRef.current = setInterval(() => loadAll(code), 3000);
+    pollRef.current = setInterval(() => loadAll(code), POLLING_INTERVAL_MS);
     setInitialLoadDone(true);
     // brand-new room + no matches yet + this person is the host -> take them straight to match
     // creation instead of dropping them on an empty board they'd have to navigate away from anyway
@@ -940,17 +1109,17 @@ export default function WorldCupBetting() {
     const poolLabel = poolKey === 'final' ? '最终结果' : '常规时间';
     if (freshPoolBets.length === 0) { showToast(`这场比赛还没有人下${poolLabel}注`); return; }
 
-    const { payouts, refunded } = settlePool(freshPoolBets, winningDirection);
+    const { payouts, betPayouts, refunded } = settlePool(freshPoolBets, winningDirection);
 
     const settledIds = new Set(freshPoolBets.map((b) => b.id));
     const newBets = betsRef.current.map((b) => {
       if (!settledIds.has(b.id)) return b;
       if (refunded) {
         // nobody backed the winning outcome -- everyone gets their stake back, no winners/losers
-        return { ...b, status: 'refunded', payout: payouts[b.player] ?? b.amount };
+        return { ...b, status: 'refunded', payout: betPayouts[b.id] ?? b.amount };
       }
       const won = b.direction === winningDirection;
-      return { ...b, status: won ? 'won' : 'lost', payout: won ? payouts[b.player] ?? 0 : 0 };
+      return { ...b, status: won ? 'won' : 'lost', payout: won ? betPayouts[b.id] ?? 0 : 0 };
     });
     betsRef.current = newBets;
     await persistBets(sessionCode, newBets);
@@ -1183,10 +1352,12 @@ export default function WorldCupBetting() {
     return (
       <div style={styles.page}>
         <style>{fontFace}</style>
-        <div style={styles.joinCard}>
-          <div style={styles.joinBadge}>⚽</div>
-          <div style={styles.joinEyebrow}>世界杯观赛夜</div>
-          <div style={styles.joinTitle}>实时筹码下注</div>
+        <div className="join-card">
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+            <img src={heroImg} style={{ width: 140, height: 'auto', objectFit: 'contain' }} alt="Hero Logo" />
+          </div>
+          <div style={{ ...styles.joinEyebrow, letterSpacing: 2, fontSize: 11 }}>世界杯观赛夜 · 实时筹码下注</div>
+          <div className="join-title">绿茵筹码风暴</div>
           {storageBroken && (
             <div style={styles.storageWarning}>
               ⚠️ 检测到存储功能异常，数据可能无法保存或同步给其他人。请确认这个 artifact 已经正确 Publish（不是草稿状态），并刷新页面重试。
@@ -1195,20 +1366,23 @@ export default function WorldCupBetting() {
           )}
           <div style={styles.joinSub}>输入房间码：已存在就加入，不存在就自动创建新房间</div>
           <input
-            style={styles.joinInput}
+            className="join-input"
             placeholder="房间码，如 PARTY01"
             value={roomCode}
             onChange={(e) => setRoomCode(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && joinGame()}
           />
           <input
-            style={styles.joinInput}
+            className="join-input"
             placeholder="你的名字"
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && joinGame()}
           />
-          <button style={styles.joinBtn} onClick={joinGame}>进场</button>
+          <div style={{ fontSize: 11, color: '#9FB8AC', marginTop: -6, marginBottom: 12, textAlign: 'left', paddingLeft: 4, lineHeight: 1.4 }}>
+            💡 提示：为了避免同名混淆，同一房间的玩家请尽量使用独特且好记的名字（如：小明2026）。
+          </div>
+          <button className="join-btn" onClick={joinGame}>进场</button>
           <div style={styles.joinHint}>提示：给自己的这盘起个好记的房间码（比如队名缩写+日期），发给朋友，大家填一样的房间码就能进同一盘</div>
         </div>
       </div>
@@ -1223,6 +1397,7 @@ export default function WorldCupBetting() {
         matches={matches}
         activeMatchId={activeMatchId}
         myName={myName}
+        hostName={hostName}
         onSwitchTab={setScreen}
       />
     );
@@ -1235,9 +1410,24 @@ export default function WorldCupBetting() {
 
       {/* Room bar */}
       <div style={styles.roomBar}>
-        <span style={styles.roomCodeTag}>房间 {sessionCode}</span>
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={styles.roomCodeTag}>房间 {sessionCode}</span>
+          <span style={{ fontSize: 10, color: '#9FB8AC', fontWeight: 500 }}>
+            👑 主持人: {hostName || '（等待加入）'}
+          </span>
+        </div>
         <button style={styles.leaveBtn} onClick={leaveRoom}>切换房间</button>
       </div>
+
+      {/* Welcome banner */}
+      {showWelcomeBanner && (
+        <div style={styles.welcomeBanner}>
+          <div style={styles.welcomeBannerContent}>
+            <span>👋 <strong>欢迎回来，{showWelcomeBanner}！</strong> 你的筹码（{players[showWelcomeBanner] || 100}）和历史下注已同步恢复。</span>
+            <button style={styles.welcomeBannerClose} onClick={() => setShowWelcomeBanner(null)}>×</button>
+          </div>
+        </div>
+      )}
 
       {storageBroken && (
         <div style={{ ...styles.storageWarning, margin: '12px 20px 0' }}>
@@ -1437,7 +1627,7 @@ export default function WorldCupBetting() {
           {/* Event bets */}
           <div style={styles.sectionLabel}><span style={styles.sectionDot} />临场事件 · 系统按赔率直接发筹码</div>
           <div style={styles.eventGrid}>
-            {buildFixedEvents(currentMatch.home, currentMatch.away).map((ev) => {
+            {buildFixedEvents(currentMatch.home, currentMatch.away, currentMatch.matchMode).map((ev) => {
               const displayLabel = (currentMatch.eventLabelOverrides || {})[ev.key] || ev.label;
               const odds = eventOdds(ev.key, currentMatch.homeScore, currentMatch.awayScore, currentMatch.eventOddsOverrides);
               const isEditing = editingEventKey === ev.key;
@@ -1625,10 +1815,17 @@ export default function WorldCupBetting() {
               <div key={n} style={styles.rankRow}>
                 <span style={styles.rankNum}>{i + 1}</span>
                 <span style={styles.rankName}>
-                  {n}{n === myName ? ' (我)' : ''}
-                  {playerTitles[n] && (
-                    <span style={styles.rankTitleTag}>{playerTitles[n].emoji} {playerTitles[n].label}</span>
-                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                    <span style={{ fontWeight: 500 }}>{n}{n === myName ? ' (我)' : ''}</span>
+                    {n === hostName && (
+                      <span style={styles.rankHostTag}>👑 主持人</span>
+                    )}
+                    {playerTitles[n] && (
+                      <span style={{ ...styles.rankTitleTag, border: '1px solid rgba(242, 169, 59, 0.3)', borderRadius: 6, padding: '1px 5px', background: 'rgba(242, 169, 59, 0.04)', display: 'inline-flex', alignItems: 'center', lineHeight: 1.2 }}>
+                        {playerTitles[n].emoji} {playerTitles[n].label}
+                      </span>
+                    )}
+                  </div>
                 </span>
                 <span style={styles.rankChips}>{chips}</span>
               </div>
@@ -1673,8 +1870,8 @@ export default function WorldCupBetting() {
                 </div>
               ))}
             </div>
-            <div style={styles.sectionLabel}>新建比赛</div>
-            <div style={styles.customRow}>
+            <div style={{ ...styles.sectionLabel, paddingLeft: 0, paddingRight: 0, paddingTop: 20, paddingBottom: 8 }}>新建比赛</div>
+            <div style={{ ...styles.customRow, paddingLeft: 0, paddingRight: 0 }}>
               <input
                 style={styles.customInput}
                 placeholder="主队名"
@@ -1714,6 +1911,102 @@ export default function WorldCupBetting() {
 
 const fontFace = `
   @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap');
+
+  /* Global box-sizing reset for mobile layout safety */
+  * {
+    box-sizing: border-box;
+  }
+
+  /* Title Gradient */
+  .join-title {
+    font-family: 'Oswald', sans-serif;
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    line-height: 1.3;
+    padding-bottom: 6px; /* 防止渐变字下沿被剪切 */
+    background: linear-gradient(135deg, #FFD175 0%, #F2A93B 50%, #C97E25 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 4px 10px rgba(242, 169, 59, 0.15);
+    letter-spacing: 1px;
+  }
+
+  /* Glassmorphism card animation with mobile responsiveness */
+  .join-card {
+    width: calc(100% - 32px);
+    max-width: 380px;
+    margin: 8vh auto 0;
+    padding: 40px 24px;
+    text-align: center;
+    background: rgba(15, 69, 54, 0.45);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 24px;
+    border: 1px solid rgba(242, 169, 59, 0.15);
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition: transform 0.4s cubic-bezier(0.165, 0.84, 0.44, 1), box-shadow 0.4s ease;
+  }
+  .join-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 32px 64px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 0 20px rgba(242, 169, 59, 0.05);
+  }
+
+  /* Premium inputs with focus glows */
+  .join-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 14px 16px;
+    font-size: 15px;
+    border-radius: 12px;
+    border: 1.5px solid rgba(42, 87, 68, 0.8);
+    background: rgba(10, 40, 31, 0.7);
+    color: #F5F5F0;
+    margin-bottom: 14px;
+    outline: none;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  }
+  .join-input:hover {
+    border-color: rgba(242, 169, 59, 0.4);
+    background: rgba(10, 40, 31, 0.9);
+  }
+  .join-input:focus {
+    border-color: #F2A93B;
+    background: #0A281F;
+    box-shadow: 0 0 0 3px rgba(242, 169, 59, 0.25);
+  }
+  .join-input::placeholder {
+    color: rgba(159, 184, 172, 0.55);
+  }
+
+  /* Entering button style */
+  .join-btn {
+    width: 100%;
+    padding: 15px 16px;
+    font-size: 16px;
+    font-weight: 700;
+    font-family: 'Oswald', sans-serif;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    border-radius: 12px;
+    border: none;
+    background: linear-gradient(135deg, #FFD175 0%, #F2A93B 100%);
+    color: #0A281F;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(242, 169, 59, 0.3);
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    position: relative;
+    overflow: hidden;
+  }
+  .join-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(242, 169, 59, 0.45);
+    background: linear-gradient(135deg, #FFE094 0%, #F4B654 100%);
+  }
+  .join-btn:active {
+    transform: translateY(1px);
+    box-shadow: 0 2px 8px rgba(242, 169, 59, 0.2);
+  }
 `;
 
 function TabBar({ active, onSwitch }) {
@@ -1738,7 +2031,7 @@ function TabBar({ active, onSwitch }) {
   );
 }
 
-function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, onSwitchTab }) {
+function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, hostName, onSwitchTab }) {
   const [filter, setFilter] = useState('current'); // 'current' | 'all'
   const relevantBets = filter === 'current' ? bets.filter((b) => b.matchId === activeMatchId) : bets;
   const sorted = [...relevantBets].sort((a, b) => {
@@ -1766,7 +2059,12 @@ function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, onS
     <div style={styles.page}>
       <style>{fontFace}</style>
       <div style={styles.roomBar}>
-        <span style={styles.roomCodeTag}>房间 {sessionCode} · 下注情况</span>
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={styles.roomCodeTag}>房间 {sessionCode} · 下注情况</span>
+          <span style={{ fontSize: 10, color: '#9FB8AC', fontWeight: 500 }}>
+            👑 主持人: {hostName || '（等待加入）'}
+          </span>
+        </div>
       </div>
 
       <div style={styles.betsFilterRow}>
@@ -2240,26 +2538,28 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: 4,
-    padding: '2px 16px',
+    padding: '6px 16px',
     background: 'rgba(0,0,0,0.25)',
     borderRadius: 10,
     border: '1px solid rgba(242,169,59,0.25)',
   },
   bigScore: {
     fontFamily: "'Oswald', sans-serif",
-    fontSize: 46,
+    fontSize: 40,
     fontWeight: 700,
     color: '#F5F5F0',
     minWidth: 36,
     textAlign: 'center',
     fontVariantNumeric: 'tabular-nums',
     letterSpacing: -1,
+    lineHeight: 1,
   },
   scoreColon: {
     fontFamily: "'Oswald', sans-serif",
     fontSize: 26,
     color: '#F2A93B',
     fontWeight: 700,
+    lineHeight: 1,
   },
   editRow: {
     textAlign: 'center',
@@ -2728,6 +3028,18 @@ const styles = {
   rankTitleTag: {
     fontSize: 10,
     color: '#F2A93B',
+  },
+  rankHostTag: {
+    fontSize: 9,
+    color: '#F2A93B',
+    border: '1px solid rgba(242, 169, 59, 0.4)',
+    borderRadius: 6,
+    padding: '1px 5px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    fontWeight: 700,
+    background: 'rgba(242, 169, 59, 0.08)',
+    lineHeight: 1.2,
   },
   rankChips: {
     fontFamily: "'Oswald', sans-serif",
@@ -3292,6 +3604,30 @@ const recapStyles = {
   titleLabel: {
     fontSize: 12,
     color: '#F2A93B',
+  },
+  welcomeBanner: {
+    background: 'rgba(242, 169, 59, 0.12)',
+    borderBottom: '1px solid rgba(242, 169, 59, 0.3)',
+    color: '#FFD175',
+    padding: '12px 20px',
+    fontSize: 13,
+    lineHeight: 1.5,
+  },
+  welcomeBannerContent: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    maxWidth: 1126,
+    margin: '0 auto',
+  },
+  welcomeBannerClose: {
+    background: 'transparent',
+    border: 'none',
+    color: '#FFD175',
+    fontSize: 20,
+    cursor: 'pointer',
+    padding: '0 5px',
+    lineHeight: 1,
   },
   footer: {
     textAlign: 'center',
