@@ -738,8 +738,8 @@ export default function WorldCupBetting() {
         if (p && p.value) latest = JSON.parse(p.value);
       } catch (e) {}
       const merged = { ...latest, ...next };
-      setPlayers(merged);
       await window.storage.set(sessionKey(code, 'players'), JSON.stringify(merged), true);
+      setPlayers(merged);
       return true;
     } catch (e) {
       showToast('⚠️ 筹码数据保存失败，请检查网络后重试');
@@ -755,8 +755,8 @@ export default function WorldCupBetting() {
         if (m && m.value) latest = JSON.parse(m.value);
       } catch (e) {}
       const merged = { ...latest, ...next };
-      setMatches(merged);
       await window.storage.set(sessionKey(code, 'matches'), JSON.stringify(merged), true);
+      setMatches(merged);
       return true;
     } catch (e) {
       showToast('⚠️ 比赛数据保存失败，请检查网络后重试');
@@ -765,9 +765,9 @@ export default function WorldCupBetting() {
   };
 
   const persistActiveMatch = async (code, id) => {
-    setActiveMatchId(id);
     try {
       await window.storage.set(sessionKey(code, 'active-match'), JSON.stringify(id), true);
+      setActiveMatchId(id);
       return true;
     } catch (e) {
       showToast('⚠️ 切换比赛保存失败，请检查网络后重试');
@@ -803,8 +803,8 @@ export default function WorldCupBetting() {
       });
 
       const merged = Array.from(map.values()).sort((a, b) => getBetTime(b) - getBetTime(a));
-      setBets(merged);
       await window.storage.set(sessionKey(code, 'bets'), JSON.stringify(merged), true);
+      setBets(merged);
       return true;
     } catch (e) {
       showToast('⚠️ 下注数据保存失败，请检查网络后重试');
@@ -813,9 +813,9 @@ export default function WorldCupBetting() {
   };
 
   const persistHost = async (code, name) => {
-    setHostName(name);
     try {
       await window.storage.set(sessionKey(code, 'host'), JSON.stringify(name), true);
+      setHostName(name);
       return true;
     } catch (e) {
       showToast('⚠️ 主持人身份保存失败，请检查网络后重试');
@@ -1024,15 +1024,25 @@ export default function WorldCupBetting() {
     if (!pending) return;
     setPendingBetConfirm(null);
 
-    const freshChips = playersRef.current[myName] || 0;
-    if (pending.amount > freshChips) { showToast('筹码不够啦'); return; } // re-check in case state moved since the modal opened
+    const oldChips = playersRef.current[myName] || 0;
+    if (pending.amount > oldChips) { showToast('筹码不够啦'); return; } // re-check in case state moved since the modal opened
 
-    const newPlayers = { ...playersRef.current, [myName]: freshChips - pending.amount };
+    const newPlayers = { ...playersRef.current, [myName]: oldChips - pending.amount };
+    
+    // Step 1: Write chips deduction to DB first
+    const successPlayers = await persistPlayers(sessionCode, newPlayers);
+    if (!successPlayers) {
+      // Aborted. persistPlayers has already triggered toast.
+      return;
+    }
+    
+    // Update local players ref
     playersRef.current = newPlayers;
-    await persistPlayers(sessionCode, newPlayers);
 
+    // Build the bet object
+    let bet;
     if (pending.kind === 'event') {
-      const bet = {
+      bet = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         matchId: activeMatchId,
         betClass: 'event',
@@ -1045,14 +1055,6 @@ export default function WorldCupBetting() {
         scoreAtBet: `${currentMatch.homeScore}:${currentMatch.awayScore}`,
         time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       };
-      const newBets = [bet, ...betsRef.current];
-      betsRef.current = newBets;
-      await persistBets(sessionCode, newBets);
-      showToast(`下注成功：${pending.label} @ ${pending.odds}x`);
-      if (typeof pending.betKey === 'string' && pending.betKey.startsWith('custom-')) {
-        setCustomEvent('');
-        setCustomOdds('2.0');
-      }
     } else {
       // recompute shares at confirm time using the freshest pool state, in case someone else
       // bet in the few seconds between opening the confirm modal and tapping confirm
@@ -1061,7 +1063,7 @@ export default function WorldCupBetting() {
       const freshPrice = sharePricePerChip(pending.poolKey, pending.direction, elapsedRatio, freshStake, currentMatch.homeScore, currentMatch.awayScore);
       const shares = sharesForStake(pending.amount, freshPrice);
 
-      const bet = {
+      bet = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         matchId: activeMatchId,
         betClass: 'pool',
@@ -1076,10 +1078,32 @@ export default function WorldCupBetting() {
         scoreAtBet: `${currentMatch.homeScore}:${currentMatch.awayScore}`,
         time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       };
-      const newBets = [bet, ...betsRef.current];
-      betsRef.current = newBets;
-      await persistBets(sessionCode, newBets);
-      showToast(`下注成功：${pending.label}，买到 ${shares.toFixed(1)} 份额`);
+    }
+
+    const newBets = [bet, ...betsRef.current];
+    
+    // Step 2: Write bet to DB
+    const successBets = await persistBets(sessionCode, newBets);
+    if (!successBets) {
+      // Rollback: write original chips back to DB & revert local ref
+      const rollbackPlayers = { ...newPlayers, [myName]: oldChips };
+      await persistPlayers(sessionCode, rollbackPlayers);
+      playersRef.current = rollbackPlayers;
+      showToast('⚠️ 下注保存失败，已自动退回筹码，请重试');
+      return;
+    }
+
+    // Success! Update local bets ref
+    betsRef.current = newBets;
+
+    if (pending.kind === 'event') {
+      showToast(`下注成功：${pending.label} @ ${pending.odds}x`);
+      if (typeof pending.betKey === 'string' && pending.betKey.startsWith('custom-')) {
+        setCustomEvent('');
+        setCustomOdds('2.0');
+      }
+    } else {
+      showToast(`下注成功：${pending.label}，买到 ${bet.shares.toFixed(1)} 份额`);
     }
   };
 
@@ -1088,18 +1112,36 @@ export default function WorldCupBetting() {
     if (!sessionCode) return;
     const bet = betsRef.current.find((b) => b.id === betId);
     if (!bet || bet.status !== 'pending') return; // guard against double-resolving (rapid double-tap)
+
     const newBets = betsRef.current.map((b) => (b.id === betId ? { ...b, status: won ? 'won' : 'lost' } : b));
-    betsRef.current = newBets;
-    await persistBets(sessionCode, newBets);
+    
     if (won) {
       const payout = Math.round(bet.amount * bet.odds);
-      const freshPlayers = playersRef.current;
-      const newPlayers = { ...freshPlayers, [bet.player]: (freshPlayers[bet.player] || 0) + payout };
+      const newPlayers = { ...playersRef.current, [bet.player]: (playersRef.current[bet.player] || 0) + payout };
+
+      // Win resolution: write payout chips to DB first
+      const successPlayers = await persistPlayers(sessionCode, newPlayers);
+      if (!successPlayers) return; // aborted
+
+      // Then write resolved bet status to DB
+      const successBets = await persistBets(sessionCode, newBets);
+      if (!successBets) {
+        // Rollback: revert player payout chips in DB
+        const rollbackPlayers = { ...newPlayers, [bet.player]: (playersRef.current[bet.player] || 0) };
+        await persistPlayers(sessionCode, rollbackPlayers);
+        return;
+      }
+
       playersRef.current = newPlayers;
-      await persistPlayers(sessionCode, newPlayers);
+      betsRef.current = newBets;
       showToast(`${bet.player} 猜中「${bet.label}」，获得 ${payout} 筹码`);
     } else {
-      showToast(`${bet.player} 的「${bet.label}」未中`);
+      // Lost bet resolution: no chips awarded, simply update bet status
+      const successBets = await persistBets(sessionCode, newBets);
+      if (successBets) {
+        betsRef.current = newBets;
+        showToast(`${bet.player} 的「${bet.label}」未中`);
+      }
     }
   };
 
@@ -1122,15 +1164,28 @@ export default function WorldCupBetting() {
       const won = b.direction === winningDirection;
       return { ...b, status: won ? 'won' : 'lost', payout: won ? betPayouts[b.id] ?? 0 : 0 };
     });
-    betsRef.current = newBets;
-    await persistBets(sessionCode, newBets);
 
     const freshPlayers = { ...playersRef.current };
     Object.entries(payouts).forEach(([player, amount]) => {
       freshPlayers[player] = (freshPlayers[player] || 0) + amount;
     });
+
+    // Write payouts to DB first
+    const successPlayers = await persistPlayers(sessionCode, freshPlayers);
+    if (!successPlayers) return; // aborted
+
+    // Then write resolved bets to DB
+    const successBets = await persistBets(sessionCode, newBets);
+    if (!successBets) {
+      // Rollback: revert player payouts in DB
+      const rollbackPlayers = { ...playersRef.current };
+      await persistPlayers(sessionCode, rollbackPlayers);
+      return;
+    }
+
+    // Success! Commit to refs
     playersRef.current = freshPlayers;
-    await persistPlayers(sessionCode, freshPlayers);
+    betsRef.current = newBets;
 
     const resultLabel = winningDirection === 'home' ? currentMatch.home + '胜' : winningDirection === 'away' ? currentMatch.away + '胜' : '平局';
     if (refunded) {
