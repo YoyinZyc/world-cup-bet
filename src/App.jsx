@@ -420,6 +420,7 @@ export default function WorldCupBetting() {
   const [screen, setScreen] = useState('loading'); // loading | join | board | leaderboard | matches
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(null);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [initialLoadDone, setInitialLoadDone] = useState(false); // true once the first shared-data load has genuinely succeeded (or genuinely confirmed empty) -- distinguishes "room has no matches" from "haven't successfully read yet"
   const [name, setName] = useState('');
   const [roomCode, setRoomCode] = useState('');
@@ -1440,7 +1441,13 @@ export default function WorldCupBetting() {
           </div>
           <button className="join-btn" onClick={joinGame}>进场</button>
           <div style={styles.joinHint}>提示：给自己的这盘起个好记的房间码（比如队名缩写+日期），发给朋友，大家填一样的房间码就能进同一盘</div>
+          <div style={{ textAlign: 'center', marginTop: 16 }}>
+            <span style={{ fontSize: 12, color: '#F2A93B', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => setShowGuide(true)}>
+              📖 玩法指南 & 常见问题 (FAQ)
+            </span>
+          </div>
         </div>
+        {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
       </div>
     );
   }
@@ -1459,6 +1466,8 @@ export default function WorldCupBetting() {
     );
   }
 
+
+
   return (
     <div style={styles.page}>
       <style>{fontFace}</style>
@@ -1474,7 +1483,12 @@ export default function WorldCupBetting() {
             👑 主持人: {hostName || '（等待加入）'}
           </span>
         </div>
-        <button style={styles.leaveBtn} onClick={() => setShowLeaveConfirm(true)}>切换房间</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <span style={{ fontSize: 11, color: '#F2A93B', cursor: 'pointer', alignSelf: 'center', marginRight: 8, textDecoration: 'underline' }} onClick={() => setShowGuide(true)}>
+            玩法指南
+          </span>
+          <button style={styles.leaveBtn} onClick={() => setShowLeaveConfirm(true)}>切换房间</button>
+        </div>
       </div>
 
       {/* Welcome banner */}
@@ -1857,9 +1871,10 @@ export default function WorldCupBetting() {
       </div>
         </>
       )}
+      </div>
 
       <TabBar active="board" onSwitch={setScreen} />
-    </div>
+      {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
 
     {pendingBetConfirm && (
       <BetConfirmModal
@@ -2019,6 +2034,122 @@ export default function WorldCupBetting() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const guideStyles = {
+  content: {
+    textAlign: 'left',
+    fontSize: 13,
+    lineHeight: 1.6,
+    color: '#DCE9E2',
+    maxHeight: '55vh',
+    overflowY: 'auto',
+    paddingRight: 4,
+  },
+  sectionTitle: {
+    fontFamily: "'Oswald', sans-serif",
+    fontSize: 14,
+    color: '#F2A93B',
+    borderBottom: '1px solid rgba(42, 87, 68, 0.4)',
+    paddingBottom: 6,
+    marginBottom: 10,
+    fontWeight: 700,
+  },
+  subTitle: {
+    fontSize: 12,
+    color: '#FFD175',
+    margin: '10px 0 5px 0',
+    fontWeight: 700,
+  },
+  text: {
+    margin: '0 0 10px 0',
+  },
+  list: {
+    margin: '0 0 10px 0',
+    paddingLeft: 18,
+  },
+  faqItem: {
+    background: 'rgba(0, 0, 0, 0.15)',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+    border: '1px solid rgba(42, 87, 68, 0.3)',
+  },
+  faqQ: {
+    fontWeight: 700,
+    color: '#FFD175',
+    marginBottom: 4,
+  },
+  faqA: {
+    color: '#9FB8AC',
+  },
+  playfulBox: {
+    background: 'rgba(242, 169, 59, 0.08)',
+    border: '1px dashed rgba(242, 169, 59, 0.4)',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 11,
+    lineHeight: 1.6,
+    color: '#FFD175',
+    marginTop: 10,
+  },
+};
+
+function GuideModal({ onClose }) {
+  return (
+    <div style={styles.modalOverlay} onClick={onClose} className="mobile-bottom-sheet-overlay">
+      <div style={{ ...styles.modalCard, maxWidth: 500 }} onClick={(e) => e.stopPropagation()} className="mobile-bottom-sheet-card">
+        <div className="sheet-handle-wrap" style={styles.sheetHandle} />
+        <div style={{ ...styles.modalTitle, textAlign: 'center', marginBottom: 20 }}>📖 玩法指南 & 常见问题</div>
+        
+        <div style={guideStyles.content}>
+          <h3 style={guideStyles.sectionTitle}>⚽ 核心规则</h3>
+          <p style={guideStyles.text}>
+            本程序为世界杯观赛夜量身打造，由<strong>主持人</strong>（首个进房的人）充当裁判操控比赛状态，<strong>玩家</strong>参与实时下注娱乐。
+          </p>
+
+          <h4 style={guideStyles.subTitle}>1. 玩法分类：</h4>
+          <ul style={guideStyles.list}>
+            <li><strong>胜负资金池 (Pool)：</strong>押中者按份额瓜分全部输家的筹码。如果没人猜中，全额退还本金。</li>
+            <li><strong>临场事件赔率 (Event)：</strong>如“出现红牌”、“下一球谁进”。由系统按固定赔率发奖，支持主持人或玩家临时提议新事件！</li>
+          </ul>
+
+          <h4 style={guideStyles.subTitle}>2. 角色分工：</h4>
+          <ul style={guideStyles.list}>
+            <li><strong>主持人：</strong>负责开赛、暂停时间、登记进球数、开启/结束下注、结算结果。</li>
+            <li><strong>玩家：</strong>进场自动获得 100 初始筹码，在比赛结束前自由下注。</li>
+          </ul>
+
+          <h3 style={{ ...guideStyles.sectionTitle, marginTop: 20 }}>❓ 常见问题 (FAQ)</h3>
+          
+          <div style={guideStyles.faqItem}>
+            <div style={guideStyles.faqQ}>Q: 感觉画面卡住、数据不同步或赔率没更新？</div>
+            <div style={guideStyles.faqA}>A: <strong>刷新网页是解决一切玄学问题的终极银弹！</strong> 别担心，刷新后系统会自动重新连接并恢复你的所有筹码与历史记录，不会丢下一分钱。</div>
+          </div>
+
+          <div style={guideStyles.faqItem}>
+            <div style={guideStyles.faqQ}>Q: 中途刷新网页或断网了，筹码会丢失吗？</div>
+            <div style={guideStyles.faqA}>A: 不会。只需输入相同的房间号和名字重新进入，系统会自动识别“欢迎回来”并恢复你的筹码和下注历史。</div>
+          </div>
+
+          <div style={guideStyles.faqItem}>
+            <div style={guideStyles.faqQ}>Q: 小组赛与淘汰赛有什么区别？</div>
+            <div style={guideStyles.faqA}>A: 小组赛有“平局”选项；淘汰赛必须分出胜负，默认提供“有加时赛”、“有点球大战”的下注事件。</div>
+          </div>
+
+          <h3 style={{ ...guideStyles.sectionTitle, marginTop: 24 }}>🎉 作者有话说</h3>
+          <div style={guideStyles.playfulBox}>
+            📢 <strong>温馨说明：</strong><br />
+            1. 本程序筹码纯属观赛娱乐，<strong>无法兑换真实货币</strong>！请勿尝试拿着十万筹码去要求主持人请客。<br />
+            2. 观赛虽好，可不要贪杯；下注虽爽，赢了也请小声庆祝，给天台上的朋友多留一丝清静 🤫<br />
+            3. 如果下注屡屡不中，建议立即刷新网页“转转运”，或者直接去抢主持人的键盘。
+          </div>
+        </div>
+
+        <button style={{ ...styles.joinBtn, marginTop: 20 }} onClick={onClose}>我知道了</button>
+      </div>
     </div>
   );
 }
@@ -2287,9 +2418,9 @@ function LiveBetsScreen({ sessionCode, bets, matches, activeMatchId, myName, hos
           );
         })}
       </div>
-
-        <TabBar active="bets" onSwitch={onSwitchTab} />
       </div>
+
+      <TabBar active="bets" onSwitch={onSwitchTab} />
     </div>
   );
 }
@@ -2518,7 +2649,7 @@ const styles = {
     `,
     fontFamily: "'Noto Sans SC', sans-serif",
     color: '#F5F5F0',
-    paddingBottom: 40,
+    paddingBottom: 90,
   },
   loadingWrap: {
     minHeight: '100vh',
@@ -2643,12 +2774,17 @@ const styles = {
     border: '1px solid #24344F',
   },
   roomBar: {
+    position: 'sticky',
+    top: 0,
+    zIndex: 90,
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '10px 20px',
-    background: '#0A1830',
-    borderBottom: '1px solid #1B4A5C',
+    padding: '12px 20px',
+    background: 'rgba(11, 61, 46, 0.92)',
+    backdropFilter: 'blur(12px)',
+    WebkitBackdropFilter: 'blur(12px)',
+    borderBottom: '1.5px solid rgba(242, 169, 59, 0.15)',
   },
   roomCodeTag: {
     fontSize: 12,
@@ -3428,10 +3564,13 @@ const styles = {
     left: 0,
     right: 0,
     display: 'flex',
-    background: '#0A1830',
-    borderTop: '1px solid #1B4A5C',
-    paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+    background: 'rgba(11, 61, 46, 0.92)',
+    backdropFilter: 'blur(12px)',
+    WebkitBackdropFilter: 'blur(12px)',
+    borderTop: '1.5px solid rgba(242, 169, 59, 0.15)',
+    paddingBottom: 'calc(4px + env(safe-area-inset-bottom, 0px))',
     zIndex: 150,
+    boxShadow: '0 -4px 20px rgba(0, 0, 0, 0.3)',
   },
   tabBarBtn: {
     flex: 1,
