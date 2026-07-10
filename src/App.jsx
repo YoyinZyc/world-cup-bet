@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './supabaseClient'; // 引入咱们配置好的客户端
-import heroImg from './assets/hero.png';
+import heroImg from './assets/soccer_bite_flat.jpg';
 
 // ====== 真正的云端同步适配器 ======
 if (typeof window !== 'undefined' && !window.storage) {
@@ -1409,12 +1409,37 @@ export default function WorldCupBetting() {
     return (
       <div style={styles.page}>
         <style>{fontFace}</style>
+        
+        {/* SVG Filter to key out the black background of the flat JPEG image and turn it into gold vector color */}
+        <svg style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
+          <defs>
+            <filter id="black-to-transparent">
+              <feColorMatrix type="matrix" values="
+                0 0 0 0.95 0
+                0 0 0 0.66 0
+                0 0 0 0.23 0
+                0.33 0.33 0.33 0 0
+              " />
+            </filter>
+          </defs>
+        </svg>
+
         <div className="join-card animate-fade-in">
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-            <img src={heroImg} style={{ width: 140, height: 'auto', objectFit: 'contain' }} alt="Hero Logo" />
+            <img 
+              src={heroImg} 
+              style={{ 
+                width: 120, 
+                height: 120, 
+                objectFit: 'contain', 
+                filter: 'url(#black-to-transparent)',
+                opacity: 0.95 
+              }} 
+              alt="Bite Soccer Logo" 
+            />
           </div>
           <div style={{ ...styles.joinEyebrow, letterSpacing: 2, fontSize: 11 }}>世界杯观赛夜 · 实时筹码下注</div>
-          <div className="join-title">绿茵筹码风暴</div>
+          <div className="join-title">WorldCup Bite</div>
           {storageBroken && (
             <div style={styles.storageWarning}>
               ⚠️ 检测到存储功能异常，数据可能无法保存或同步给其他人。请确认这个 artifact 已经正确 Publish（不是草稿状态），并刷新页面重试。
